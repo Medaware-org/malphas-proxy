@@ -4,7 +4,7 @@ import kotlinx.serialization.decodeFromString
 import net.mamoe.yamlkt.Yaml
 import java.io.File
 
-fun loadConfig(): MalphasProxyConfig {
+fun loadConfig(): ServiceConfiguration {
     val yaml = Yaml {}
 
     var fcfg = File("config.yaml")
@@ -13,6 +13,6 @@ fun loadConfig(): MalphasProxyConfig {
 
     val cfg = fcfg.readText()
 
-    val config: MalphasProxyConfig = yaml.decodeFromString(cfg)
+    val config: ServiceConfiguration = yaml.decodeFromString(cfg)
     return config
 }

@@ -1,3 +1,9 @@
-malphas:
-  host: "http://google.com"
-  port: 80
+backend:
+  host: "http://localhost"
+  port: 1234
+auth:
+  redirect: "http://localhost:5173/dash"
+proxy:
+  pass: []
+frontend:
+  origin: "http://localhost:5173"

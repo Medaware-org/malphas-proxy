@@ -5,29 +5,94 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.server.application.*
+import io.ktor.server.auth.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import io.ktor.util.*
+import io.ktor.server.sessions.*
 import io.ktor.utils.io.jvm.javaio.*
-import org.apache.http.client.methods.HttpHead
-import org.malphas.proxy.config.MalphasProxyConfig
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.malphas.proxy.config.ServiceConfiguration
 
-fun Application.configureRouting(config: MalphasProxyConfig, client: HttpClient) {
+fun Application.configureRouting(config: ServiceConfiguration, httpClient: HttpClient) {
+    val redirects = mutableMapOf<String, String>()
+    install(Authentication) {
+        oauth("auth-oauth-google") {
+            urlProvider = { "http://localhost:8080/callback" }
+            providerLookup = {
+                OAuthServerSettings.OAuth2ServerSettings(
+                    name = "google",
+                    authorizeUrl = "https://accounts.google.com/o/oauth2/auth",
+                    accessTokenUrl = "https://accounts.google.com/o/oauth2/token",
+                    requestMethod = HttpMethod.Post,
+                    clientId = System.getenv("GOOGLE_CLIENT_ID"),
+                    clientSecret = System.getenv("GOOGLE_CLIENT_SECRET"),
+                    defaultScopes = listOf("https://www.googleapis.com/auth/userinfo.profile"),
+                    onStateCreated = { call, state ->
+                        call.request.queryParameters["redirectUrl"]?.let {
+                            redirects[state] = it
+                        }
+                    }
+                )
+            }
+            client = httpClient
+        }
+    }
+
     routing {
         get("/") {
             call.respond(HttpStatusCode.OK, "Malphas authentication proxy is up and running.")
         }
 
-        proxyRoute(config, client)
+        authenticate("auth-oauth-google") {
+            get("/login") {}
+            get("/callback") {
+                val currPrincipal: OAuthAccessTokenResponse.OAuth2? = call.principal()
+                val principalState = currPrincipal?.state
+
+                if (currPrincipal == null || principalState == null) {
+                    call.application.environment.log.warn("One or both of `currPrincipal` and `principalState` is null. This should not happen.")
+                    call.respond(HttpStatusCode.Unauthorized, "Something went wrong.")
+                    return@get
+                }
+
+                val accessToken = currPrincipal.accessToken
+
+                // Acquire Google User ID
+                val req = httpClient.get("https://www.googleapis.com/oauth2/v3/userinfo") {
+                    header(HttpHeaders.Authorization, "Bearer $accessToken")
+                }
+                val userId = Json.parseToJsonElement(req.bodyAsText()).jsonObject["sub"]?.jsonPrimitive?.content!!
+
+                call.application.environment.log.info("Authenticated user with ID $userId")
+
+                call.sessions.set(UserSession(principalState, accessToken, userId))
+                redirects[principalState]?.let { redirect ->
+                    call.respondRedirect(redirect)
+                    return@get
+                }
+                call.respondRedirect(config.auth.redirect)
+            }
+        }
+        proxyRoute(config, httpClient)
     }
 }
 
-fun Route.proxyRoute(config: MalphasProxyConfig, client: HttpClient) {
+fun Route.proxyRoute(config: ServiceConfiguration, client: HttpClient) {
     route("{...}") {
         handle {
-            val targetUrl = "${config.malphas.host}:${config.malphas.port}${call.request.uri}"
-            call.application.environment.log.info("Proxy \"${call.request.uri}\" to $targetUrl")
+            val uri = call.request.uri
+            val targetUrl = "${config.backend.host}:${config.backend.port}$uri"
+            val pass = config.proxy.pass.contains(uri)
+            val session = call.sessions.get(name = "malphas_session") as UserSession?
+            if (session == null && !pass) {
+                call.application.environment.log.info("(DENY) Denied proxy \"${call.request.uri}\" -> \"$targetUrl\" due to lacking permission")
+                call.respond(HttpStatusCode.Unauthorized, "This endpoint requires authorization.")
+                return@handle
+            }
+            call.application.environment.log.info("${if (pass) "(PASS)" else "(AUTH)"} Proxy \"${call.request.uri}\" to \"$targetUrl\"")
             val response = client.request(targetUrl) {
                 method = call.request.httpMethod
                 call.request.headers.entries().forEach { header ->
@@ -36,6 +101,13 @@ fun Route.proxyRoute(config: MalphasProxyConfig, client: HttpClient) {
 
                     header.value.forEach { headers.append(header.key, it) }
                 }
+
+                // Add headers that the backend uses for identifying users
+                if (!pass) {
+                    headers.append("X-User-ID", session!!.userId)
+                    headers.append("X-User-Name", "Osama bin Laden")
+                }
+
                 setBody(call.receiveChannel())
             }
             call.respondOutputStream(contentType = response.contentType(), status = response.status) {
