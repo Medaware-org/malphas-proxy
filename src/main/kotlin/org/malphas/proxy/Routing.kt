@@ -136,7 +136,7 @@ fun Route.proxyRoute(config: ServiceConfiguration, client: HttpClient) {
 
                 // Pass the headers along as well
                 call.request.headers.entries().forEach { header ->
-                    if (header.key == HttpHeaders.TransferEncoding || header.key == HttpHeaders.ContentLength)
+                    if (header.key.lowercase() == HttpHeaders.TransferEncoding.lowercase() || header.key.lowercase() == HttpHeaders.ContentLength.lowercase())
                         return@forEach
 
                     header.value.forEach { headers.append(header.key, it) }
