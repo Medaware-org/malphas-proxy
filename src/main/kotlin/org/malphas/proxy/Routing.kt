@@ -115,6 +115,7 @@ fun Route.proxyRoute(config: ServiceConfiguration, client: HttpClient) {
 
             // Get user info if applicable
             if (type == RouteType.REGULAR) {
+                userId = session!!.userId
                 val usernameResponse = client.get("https://www.googleapis.com/oauth2/v1/userinfo") {
                     header(HttpHeaders.Authorization, "Bearer ${session!!.token}")
                 }
