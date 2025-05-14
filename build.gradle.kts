@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 val kotlin_version: String by project
 val logback_version: String by project
 
@@ -25,6 +28,26 @@ application {
 
 repositories {
     mavenCentral()
+}
+
+fun loadDotenv(): Map<String, String> {
+    val envFile = rootProject.file(".env")
+    if (!envFile.exists()) return emptyMap()
+
+    val props = Properties()
+    FileInputStream(envFile).use { props.load(it) }
+
+    return props.entries.associate {
+        it.key.toString() to it.value.toString()
+    }
+}
+
+val dotenv = loadDotenv()
+
+tasks.named<JavaExec>("run") {
+    if (dotenv.isNotEmpty()) {
+        environment(dotenv)
+    }
 }
 
 dependencies {
