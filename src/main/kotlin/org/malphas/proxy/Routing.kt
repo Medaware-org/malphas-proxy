@@ -87,10 +87,23 @@ fun Route.proxyRoute(config: ServiceConfiguration, client: HttpClient) {
             val targetUrl = "${config.backend.host}:${config.backend.port}$uri"
             val pass = config.proxy.pass.contains(uri)
             val session = call.sessions.get(name = "malphas_session") as UserSession?
+            var username: String = ""
             if (session == null && !pass) {
                 call.application.environment.log.info("(DENY) Denied proxy \"${call.request.uri}\" -> \"$targetUrl\" due to lacking permission")
                 call.respond(HttpStatusCode.Unauthorized, "This endpoint requires authorization.")
                 return@handle
+            }
+            if (!pass) {
+                val usernameResponse = client.get("https://www.googleapis.com/oauth2/v1/userinfo") {
+                    header(HttpHeaders.Authorization, "Bearer ${session!!.token}")
+                }
+                if (usernameResponse.status != HttpStatusCode.OK) {
+                    call.application.environment.log.info("(DENY) The authentication token is invalid.")
+                    call.respond(HttpStatusCode.Unauthorized, "This endpoint requires authorization.")
+                    return@handle
+                }
+                username =
+                    Json.parseToJsonElement(usernameResponse.bodyAsText()).jsonObject["name"]!!.jsonPrimitive.content
             }
             call.application.environment.log.info("${if (pass) "(PASS)" else "(AUTH)"} Proxy \"${call.request.uri}\" to \"$targetUrl\"")
             val response = client.request(targetUrl) {
@@ -105,7 +118,7 @@ fun Route.proxyRoute(config: ServiceConfiguration, client: HttpClient) {
                 // Add headers that the backend uses for identifying users
                 if (!pass) {
                     headers.append("X-User-ID", session!!.userId)
-                    headers.append("X-User-Name", "Osama bin Laden")
+                    headers.append("X-User-Name", username)
                 }
 
                 setBody(call.receiveChannel())
